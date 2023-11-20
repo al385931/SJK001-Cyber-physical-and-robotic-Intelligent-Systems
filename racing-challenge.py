@@ -1,26 +1,25 @@
 from GUI import GUI
 from HAL import HAL
 import cv2
-# Enter sequential code!
 
 # PID Controller Constants
 
 prev_error_angular = 0.0
-prev_error_braking = 0.0
+prev_error_accel = 0.0
 
 integral_angular = 0.0
-integral_braking = 0.0
+integral_accel = 0.0
 
 
-brake = 0
-
+accel = 0
 curve_angle = 0
 
+# PID for angular speed
 def calculate_pid_angular(error):
     global prev_error_angular, integral_angular
     Kp = 0.2  # Proportional constant
-    Ki = 0.0001 # Integral constant (you can experiment with this)
-    Kd = -0.00002  # Derivative constant (you can experiment with this)
+    Ki = 0.0001 # Integral constant 
+    Kd = -0.00002  # Derivative constant 
     proportional = error
     integral_angular += error
     derivative = error - prev_error_angular
@@ -28,27 +27,29 @@ def calculate_pid_angular(error):
 
     return Kp * proportional + Ki * integral_angular + Kd * derivative
 
-def calculate_pid_braking(error):
-    global prev_error_braking, integral_braking
+# PID for acceleration
+def calculate_pid_accel(error):
+    global prev_error_accel, integral_accel
     Kp = 0.5  # Proportional constant
-    Ki = 0  # Integral constant (you can experiment with this)
-    Kd = 0  # Derivative constant (you can experiment with this)
+    Ki = 0  # Integral constant 
+    Kd = 0  # Derivative constant 
     proportional = error
-    integral_braking += error
-    derivative = error - prev_error_braking
+    integral_accel += error
+    derivative = error - prev_error_accel
     prev_error = error
 
-    return Kp * proportional + Ki * integral_braking + Kd * derivative
+    return Kp * proportional + Ki * integral_accel + Kd * derivative
 
 
-def calculate_speed_factor(curve_angle):
-    return max(0.5, 1 - 0.1 * abs(curve_angle))
-    
+#Initializing values   
 i = 0
 cX, cY = 0,0
+
+
         
 while True:
-    # Enter iterative code!
+
+    # Image detection and processing
     img = HAL.getImage()
     
 
@@ -63,7 +64,7 @@ while True:
         max_contour = max(contours, key=cv2.contourArea)
         area = cv2.contourArea(max_contour)
 
-    # Encontrar el centroide de la figura formada por los contornos
+    # Centroid based on the figure detected by contours
         M = cv2.moments(contours[0])
         if M["m00"] != 0:
             cX = M["m10"] / M["m00"]
@@ -71,47 +72,58 @@ while True:
         else:
             cX, cY = 0, 0
 
-        # Calcular el error desde el centroide hasta el centro de la pantalla
+        # Error from centroid to the center of the car/screen
         error = 320 - cX
+
+	# Initial speed=maximum speed (7)
         if i == 0:
             speed = 7 
-            steering_angle = 0# Adjust the speed as needed
-    
-        if (cX >0):# Calcula el ángulo de la curva
+            steering_angle = 0
+	
+	# Non-initial states
+	# When the car is not centered, we get the angle of the curve
+        if (cX >0):
             ellipse = cv2.fitEllipse(max_contour)
             curve_angle = ellipse[2]
 
-      # Calculate control output using PID
-            
-         # Set the car's velocity and steering angle
+	    # When it is not the initial state            
             if i > 0:
+
+		# Define the angular speed (steering_angle) with the PID control function
                 control_output_angular = calculate_pid_angular(error)
                 steering_angle = 0.01*control_output_angular 
+
+		# When the error is very big, we limit speed 0.8-2.5 (depending on the acceleration controlled by PID)
                 if  abs(error) > 230:
-                    error_brake = abs(error)
-                    brake = 0.002*calculate_pid_braking(error_brake)
-                    speed = min(max(0.8,speed-brake),2.5)
+                    error_accel = abs(error)
+                    accel = 0.002*calculate_pid_accel(error_accel)
+                    speed = min(max(0.8,speed-accel),2.5) #min limits in case the speed considering the acceleration exceeds the limits for this error
+
+		# When the error is big, speed increases a bit 2.5-3.7 (depending on the acceleration controlled by PID)
                 if abs(curve_angle) > 10 and abs(error) < 230:
-                    error_brake = abs(error)
-                    brake = 0.002*calculate_pid_braking(error_brake)
-                    speed = min(max(2.5,speed+brake),3.7)
-                    #speed = max(1, 5 * calculate_speed_factor(curve_angle) * (1 - 0.2 * abs(steering_angle)))
+                    error_accel = abs(error)
+                    accel = 0.002*calculate_pid_accel(error_accel)
+                    speed = min(max(2.5,speed+accel),3.7) #min limits in case the speed considering the acceleration exceeds the limits for this error
+                   
+		# When the error is smaller, speed can increase until maximum speed 7 (depending on the acceleration controlled by PID)
                 if abs(curve_angle)<= 10 and abs(steering_angle)<0.05:
-                    #speed = max(3.5, 7 * calculate_speed_factor(curve_angle) * (1 - 0.2 * abs(steering_angle)))
-                    error_brake = abs(error)
-                    brake = 0.01*calculate_pid_braking(error_brake)
-                    speed = min(max(3.7,speed+brake),7)
+                    
+                    error_accel = abs(error)
+                    accel = 0.01*calculate_pid_accel(error_accel)
+                    speed = min(max(3.7,speed+accel),7) #min limits in case the speed considering the acceleration exceeds the limits for this error
+
+	    # Set the speeds previously calculated
             HAL.setW(steering_angle) 
             HAL.setV(speed)
-             
+
+        #Count the iteration of the loop and visualize values to control parameters     
         i = i+1  
-        #GUI.showImage(red_mask)
-        #print('%d angle: %.2f cX: %.2f cy: %.2f speed: %.2f error: %.2f curve: %.2f  ' % ( i,steering_angle, cX, cY, speed, error, curve_angle))
-        print('%d angle: %.2f speed: %.2f error: %.2f curve: %.2f brake: %.2f ' % ( i,steering_angle, speed, error, curve_angle,brake))
+        print('%d angle: %.2f speed: %.2f error: %.2f curve: %.2f accel: %.2f ' % ( i, steering_angle, speed, error, curve_angle, accel))
+
     else:
         # If no contours are found, stop the car
         HAL.setV(0)
         HAL.setW(0)     
         
-        
+    #Show the image    
     GUI.showImage(red_mask)
